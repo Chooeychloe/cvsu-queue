@@ -7,6 +7,7 @@ import { initSocket } from './socket/index.js';
 import authRoutes from './routes/authRoutes.js';
 import officeRoutes from './routes/officeRoutes.js';
 import queueRoutes from './routes/queueRoutes.js';
+import adminRoutes from './routes/adminRoutes.js';
 
 dotenv.config();
 
@@ -23,6 +24,7 @@ app.get('/api/health', (req, res) => res.json({ status: 'ok', service: 'CvSU-Bac
 app.use('/api/auth', authRoutes);
 app.use('/api/offices', officeRoutes);
 app.use('/api/queues', queueRoutes);
+app.use('/api/admin', adminRoutes);
 
 // 404 fallback
 app.use((req, res) => res.status(404).json({ message: 'Route not found.' }));

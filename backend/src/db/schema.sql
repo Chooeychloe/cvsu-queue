@@ -54,13 +54,15 @@ SELECT id, 3, CONCAT(name, ' - Window 3') FROM offices WHERE code = 'REG';
 CREATE TABLE staff (
   id            INT AUTO_INCREMENT PRIMARY KEY,
   office_id     INT NOT NULL,
+  window_id     INT NULL,                    -- fixed window this staff calls to (NULL = auto-assign)
   full_name     VARCHAR(100) NOT NULL,
   username      VARCHAR(50)  NOT NULL UNIQUE,
   password_hash VARCHAR(255) NOT NULL,
   role          ENUM('STAFF','ADMIN') NOT NULL DEFAULT 'STAFF',
   is_active     TINYINT(1) NOT NULL DEFAULT 1,
   created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  FOREIGN KEY (office_id) REFERENCES offices(id) ON DELETE CASCADE
+  FOREIGN KEY (office_id) REFERENCES offices(id) ON DELETE CASCADE,
+  FOREIGN KEY (window_id) REFERENCES windows(id) ON DELETE SET NULL
 );
 
 -- ------------------------------------------------------------
@@ -104,8 +106,7 @@ CREATE TABLE queue_logs (
 );
 
 -- ------------------------------------------------------------
--- Sample staff account (password: "password123", hashed with bcrypt)
--- Generate real hashes via the /api/auth/seed-helper or bcrypt directly.
+-- Sample admin account (username: admin, password: admin123)
+-- and per-office staff are created by `npm run seed` (backend/src/db/seedStaff.js),
+-- which hashes passwords with bcrypt instead of hardcoding them here.
 -- ------------------------------------------------------------
--- INSERT INTO staff (office_id, full_name, username, password_hash, role)
--- VALUES (1, 'Registrar Staff 1', 'registrar1', '<bcrypt-hash>', 'STAFF');

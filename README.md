@@ -17,7 +17,15 @@ cvsu-queue/
    mysql -u root -p < backend/src/db/schema.sql
    ```
    This creates the `cvsu_queue` database, the five offices, their windows
-   (3 for Registrar, 1 each for the rest), and the queue/staff/log tables.
+   (3 for Registrar, 1 each for the rest), and the queue/staff/log tables &mdash;
+   `staff` already includes the `window_id` column used to bind an account to a
+   fixed window (see "Admin panel" below).
+
+   **Already have a database from before this update?** Don't re-run schema.sql
+   (it would try to recreate existing tables). Run the migration instead:
+   ```bash
+   mysql -u root -p < backend/src/db/migrations/001_staff_window_binding.sql
+   ```
 
 2. Copy the backend env file and fill in your MySQL credentials:
    ```bash
@@ -25,12 +33,13 @@ cvsu-queue/
    cp .env.example .env
    ```
 
-3. Seed sample staff accounts (one per office, password `password123`):
+3. Seed sample staff accounts (3 registrars, one per window, plus one account per other
+   office, plus an admin account):
    ```bash
    npm install
    npm run seed
    ```
-   Accounts created: `registrar1`, `cashier1`, `admissions1`, `ithelpdesk1`, `clinic1`.
+   See "Admin panel" below for the full list of seeded usernames.
    **Change these credentials before going live.**
 
 ## 2. Run the backend
@@ -55,17 +64,50 @@ npm run dev         # http://localhost:5173
 | Interface | URL | Notes |
 |---|---|---|
 | Client Kiosk | `/` | Select an office &rarr; get a queue number &rarr; live position on `/ticket/:id` |
-| Staff Login | `/staff/login` | Staff sign in with the seeded accounts |
+| Staff Login | `/staff/login` | Staff and admins sign in here; admins land on `/admin`, staff on `/staff` |
 | Staff Dashboard | `/staff` | Call Next, Serve, Complete, Skip, Recall |
+| Admin Panel | `/admin` | Manage offices, windows, and staff accounts (see below) |
 | Public Display | `/display` | Put this on the lobby TV/monitor (full screen) |
+
+Seeded logins (from `npm run seed`): `registrar1` / `registrar2` / `registrar3` / `cashier1` /
+`admissions1` / `ithelpdesk1` / `clinic1`, all password `password123`; admin account
+`admin` / `admin123`.
+
+## Admin panel
+
+Sign in with an `ADMIN`-role account (the seed script creates one: `admin` / `admin123`) and
+you're taken to `/admin` with three tabs:
+
+- **Offices** &mdash; create a new office (code, name, prefix, starting window count) and
+  activate/deactivate existing ones. Deactivating an office removes it from the kiosk and
+  public display immediately; it also blocks new ticket creation at the API level.
+- **Windows** &mdash; pick an office and add more windows, or take a window offline (blocked
+  while it's `BUSY` serving someone) / bring it back `AVAILABLE`.
+- **Staff** &mdash; create staff or admin accounts, optionally binding a staff account to one
+  specific window (see below), deactivate accounts, and reset passwords.
+
+### Staff accounts are bound to a specific window (optional)
+
+Since Registrar has 3 physical windows staffed by 3 different people, each registrar gets
+their own account (`registrar1`, `registrar2`, `registrar3`&hellip;) and each one is bound to
+a fixed `window_id`. When a bound account clicks **Call Next**, the system calls to *that*
+window only &mdash; if it's still busy, the button is disabled rather than silently grabbing
+someone else's window. Their dashboard header shows "You call to Window 2" so it's obvious
+which desk they're wired to.
+
+An account with no window assigned (leave "Window" as "Auto-assign" when creating it) falls
+back to the original behavior: the lowest-numbered free window in that office. This is handy
+for a single-window office, or a float/relief staffer who isn't tied to one desk.
 
 ## How the pieces fit together
 
-- **Automatic window assignment.** Staff never pick a window. `POST /api/queues/staff/call-next`
+- **Automatic window assignment.** By default, staff never pick a window. `POST /api/queues/staff/call-next`
   finds the office's oldest `WAITING` ticket and the lowest-numbered `AVAILABLE` window for
-  that office (Registrar has 3, everyone else has 1) inside a single MySQL transaction with
-  row locks (`FOR UPDATE`), so two staff clicking "Call Next" at the same moment can never
-  grab the same ticket or window.
+  that office inside a single MySQL transaction with row locks (`FOR UPDATE`), so two staff
+  clicking "Call Next" at the same moment can never grab the same ticket or window. If a
+  staff account is bound to a specific window (see "Admin panel"), it calls to that window
+  only instead of picking any free one &mdash; this is how 3 registrars sharing 3 windows
+  each get their own dedicated desk.
 - **Queue lifecycle** matches the spec exactly:
   `WAITING → CALLED → SERVING → COMPLETED`, with `CALLED → SKIPPED → (recall) → CALLED`,
   and `CANCELLED` reachable from `WAITING` or `CALLED`. Every transition is written to

@@ -17,7 +17,7 @@ async function broadcastOfficeState(officeId) {
   io.to('public-display').emit('queue:update', state);
 }
 
-async function getOfficeStateInternal(officeId) {
+async function getOfficeStateInternal(officeId, staffWindowId = null) {
   const [[office]] = await pool.query(`SELECT * FROM offices WHERE id = ?`, [officeId]);
   const [windows] = await pool.query(
     `SELECT w.id, w.window_number, w.label, w.status,
@@ -47,7 +47,7 @@ async function getOfficeStateInternal(officeId) {
     [officeId, todayDateString()]
   );
 
-  return { office, windows, waiting, active: recentlyCalled, skipped };
+  return { office, windows, waiting, active: recentlyCalled, skipped, myWindowId: staffWindowId };
 }
 
 // ------------------------------------------------------------
@@ -65,6 +65,10 @@ export async function createQueue(req, res) {
     if (!office) {
       await conn.rollback();
       return res.status(404).json({ message: 'Office not found.' });
+    }
+    if (!office.is_active) {
+      await conn.rollback();
+      return res.status(409).json({ message: 'This office is not currently accepting queue tickets.' });
     }
 
     const today = todayDateString();
@@ -180,21 +184,41 @@ export async function cancelQueue(req, res) {
 export async function callNext(req, res) {
   const officeId = req.staff.officeId;
   const staffId = req.staff.id;
+  const boundWindowId = req.staff.windowId; // set if this staff account is tied to a fixed window
 
   const conn = await pool.getConnection();
   try {
     await conn.beginTransaction();
 
-    // 1. Find an available window for this office (locked)
-    const [availableWindows] = await conn.query(
-      `SELECT * FROM windows WHERE office_id = ? AND status = 'AVAILABLE'
-       ORDER BY window_number LIMIT 1 FOR UPDATE`,
-      [officeId]
-    );
-    const win = availableWindows[0];
-    if (!win) {
-      await conn.rollback();
-      return res.status(409).json({ message: 'No available window right now. Finish serving first.' });
+    // 1. Find the window this staff should call to.
+    //    Bound account: must use their own window, and it must be free.
+    //    Unbound account: fall back to the lowest-numbered free window.
+    let win;
+    if (boundWindowId) {
+      const [[boundWindow]] = await conn.query(
+        `SELECT * FROM windows WHERE id = ? AND office_id = ? FOR UPDATE`,
+        [boundWindowId, officeId]
+      );
+      if (!boundWindow) {
+        await conn.rollback();
+        return res.status(409).json({ message: 'Your assigned window could not be found.' });
+      }
+      if (boundWindow.status !== 'AVAILABLE') {
+        await conn.rollback();
+        return res.status(409).json({ message: `${boundWindow.label} is still busy. Finish serving first.` });
+      }
+      win = boundWindow;
+    } else {
+      const [availableWindows] = await conn.query(
+        `SELECT * FROM windows WHERE office_id = ? AND status = 'AVAILABLE'
+         ORDER BY window_number LIMIT 1 FOR UPDATE`,
+        [officeId]
+      );
+      win = availableWindows[0];
+      if (!win) {
+        await conn.rollback();
+        return res.status(409).json({ message: 'No available window right now. Finish serving first.' });
+      }
     }
 
     // 2. Find the oldest waiting ticket for this office (locked)
@@ -329,6 +353,7 @@ export async function recallQueue(req, res) {
   const { id } = req.params;
   const officeId = req.staff.officeId;
   const staffId = req.staff.id;
+  const boundWindowId = req.staff.windowId;
 
   const conn = await pool.getConnection();
   try {
@@ -343,15 +368,28 @@ export async function recallQueue(req, res) {
       return res.status(400).json({ message: 'Only skipped tickets can be recalled.' });
     }
 
-    const [availableWindows] = await conn.query(
-      `SELECT * FROM windows WHERE office_id = ? AND status = 'AVAILABLE'
-       ORDER BY window_number LIMIT 1 FOR UPDATE`,
-      [officeId]
-    );
-    const win = availableWindows[0];
-    if (!win) {
-      await conn.rollback();
-      return res.status(409).json({ message: 'No available window to recall this ticket.' });
+    let win;
+    if (boundWindowId) {
+      const [[boundWindow]] = await conn.query(
+        `SELECT * FROM windows WHERE id = ? AND office_id = ? FOR UPDATE`,
+        [boundWindowId, officeId]
+      );
+      if (!boundWindow || boundWindow.status !== 'AVAILABLE') {
+        await conn.rollback();
+        return res.status(409).json({ message: 'Your assigned window is not available to recall this ticket.' });
+      }
+      win = boundWindow;
+    } else {
+      const [availableWindows] = await conn.query(
+        `SELECT * FROM windows WHERE office_id = ? AND status = 'AVAILABLE'
+         ORDER BY window_number LIMIT 1 FOR UPDATE`,
+        [officeId]
+      );
+      win = availableWindows[0];
+      if (!win) {
+        await conn.rollback();
+        return res.status(409).json({ message: 'No available window to recall this ticket.' });
+      }
     }
 
     await conn.query(
@@ -385,7 +423,7 @@ export async function recallQueue(req, res) {
 // STAFF dashboard: full state for their office
 export async function getOfficeQueueState(req, res) {
   try {
-    const state = await getOfficeStateInternal(req.staff.officeId);
+    const state = await getOfficeStateInternal(req.staff.officeId, req.staff.windowId);
     res.json(state);
   } catch (err) {
     console.error(err);
