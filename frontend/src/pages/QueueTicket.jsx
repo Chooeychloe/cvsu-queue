@@ -11,17 +11,26 @@ import {
   PhoneCall,
   RotateCcw,
   Ticket,
+  Users,
   XCircle,
 } from "lucide-react";
 
 import api from "../api/axios.js";
 import { socket } from "../api/socket.js";
 import StatusBadge from "../components/StatusBadge.jsx";
+import { removeSavedTicket } from "../utils/ticketStorage.js";
+
+const TERMINAL_STATUSES = [
+  "COMPLETED",
+  "CANCELLED",
+  "SKIPPED",
+];
 
 const STATUS_MESSAGE = {
   COMPLETED: "Your transaction is complete. Thank you.",
   CANCELLED: "This ticket has been cancelled.",
-  SKIPPED: "You were called but missed. Please see staff at the office.",
+  SKIPPED:
+    "You were called but missed. Please see staff at the office.",
 };
 
 const STATUS_CONFIG = {
@@ -32,6 +41,7 @@ const STATUS_CONFIG = {
     container: "border-cvsu-blue/20 bg-blue-50",
     iconBox: "bg-white text-cvsu-blue",
   },
+
   CALLED: {
     icon: PhoneCall,
     label: "You are being called",
@@ -39,6 +49,7 @@ const STATUS_CONFIG = {
     container: "border-status-called/30 bg-yellow-50",
     iconBox: "bg-white text-status-called",
   },
+
   SERVING: {
     icon: Monitor,
     label: "Now serving",
@@ -46,6 +57,7 @@ const STATUS_CONFIG = {
     container: "border-status-serving/30 bg-green-50",
     iconBox: "bg-white text-status-serving",
   },
+
   COMPLETED: {
     icon: CheckCircle2,
     label: "Transaction complete",
@@ -53,6 +65,7 @@ const STATUS_CONFIG = {
     container: "border-status-serving/20 bg-green-50",
     iconBox: "bg-white text-status-serving",
   },
+
   SKIPPED: {
     icon: RotateCcw,
     label: "Ticket skipped",
@@ -60,6 +73,7 @@ const STATUS_CONFIG = {
     container: "border-status-skipped/20 bg-orange-50",
     iconBox: "bg-white text-status-skipped",
   },
+
   CANCELLED: {
     icon: XCircle,
     label: "Ticket cancelled",
@@ -80,7 +94,15 @@ export default function QueueTicket() {
   async function refresh() {
     try {
       const res = await api.get(`/queues/${id}`);
-      setData(res.data);
+      const responseData = res.data;
+
+      setData(responseData);
+
+      const status = responseData.queue?.status;
+
+      if (TERMINAL_STATUSES.includes(status)) {
+        removeSavedTicket(Number(id));
+      }
     } catch {
       toast.error("Could not load your ticket.");
     } finally {
@@ -97,19 +119,21 @@ export default function QueueTicket() {
 
     socket.emit("join:public-display");
 
-    const handler = () => refresh();
+    const handleQueueUpdate = () => {
+      refresh();
+    };
 
-    socket.on("queue:update", handler);
-    socket.on("queue:called", handler);
+    socket.on("queue:update", handleQueueUpdate);
+    socket.on("queue:called", handleQueueUpdate);
 
     return () => {
-      socket.off("queue:update", handler);
-      socket.off("queue:called", handler);
+      socket.off("queue:update", handleQueueUpdate);
+      socket.off("queue:called", handleQueueUpdate);
     };
   }, [data?.queue?.office_id]);
 
   async function handleCancel() {
-    if (!confirm("Cancel this queue ticket?")) return;
+    if (!window.confirm("Cancel this queue ticket?")) return;
 
     setCancelling(true);
 
@@ -130,49 +154,11 @@ export default function QueueTicket() {
   }
 
   if (loading) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-surface">
-        <div className="flex items-center gap-3 text-sm text-ink-muted">
-          <span className="h-4 w-4 animate-spin rounded-full border-2 border-border border-t-cvsu-blue" />
-          Loading your ticket...
-        </div>
-      </div>
-    );
+    return <LoadingState />;
   }
 
   if (!data?.queue) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-surface px-6">
-        <div className="text-center">
-          <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-red-50 text-status-cancelled">
-            <Ticket className="h-6 w-6" />
-          </div>
-
-          <h1 className="mt-5 text-lg font-bold text-ink">
-            Ticket not found
-          </h1>
-
-          <p className="mt-1 text-sm text-ink-muted">
-            This queue ticket could not be loaded.
-          </p>
-
-          <button
-            onClick={() => navigate("/")}
-            className="
-              mt-6 rounded-lg
-              bg-cvsu-blue
-              px-5 py-2.5
-              text-sm font-semibold
-              text-white
-              transition
-              hover:bg-cvsu-blue-dark
-            "
-          >
-            Return to Queue
-          </button>
-        </div>
-      </div>
-    );
+    return <TicketNotFound onBack={() => navigate("/")} />;
   }
 
   const { queue, peopleAhead } = data;
@@ -182,20 +168,20 @@ export default function QueueTicket() {
 
   const StatusIcon = statusConfig.icon;
 
-  const isCalledOrServing = [
-    "CALLED",
-    "SERVING",
-  ].includes(queue.status);
+  const isWaiting = queue.status === "WAITING";
+
+  const isCalledOrServing =
+    queue.status === "CALLED" ||
+    queue.status === "SERVING";
+
+  const terminalMessage =
+    STATUS_MESSAGE[queue.status];
 
   return (
-    <div className="min-h-screen bg-surface">
-
-      {/* =====================================================
-          HEADER
-      ====================================================== */}
+    <main className="min-h-screen bg-surface">
+      {/* Header */}
       <header className="border-b border-border bg-white">
         <div className="mx-auto flex max-w-xl items-center justify-between px-5 py-4">
-
           <div className="flex items-center gap-3">
             <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-cvsu-blue">
               <span className="text-xs font-black text-cvsu-gold">
@@ -203,7 +189,7 @@ export default function QueueTicket() {
               </span>
             </div>
 
-            <div>
+            <div className="leading-tight">
               <p className="text-xs font-bold text-cvsu-blue">
                 Cavite State University
               </p>
@@ -221,11 +207,8 @@ export default function QueueTicket() {
         </div>
       </header>
 
-      {/* =====================================================
-          CONTENT
-      ====================================================== */}
-      <main className="mx-auto w-full max-w-xl px-5 py-8 sm:py-12">
-
+      {/* Content */}
+      <div className="mx-auto w-full max-w-xl px-5 py-8 sm:py-12">
         {/* Office */}
         <div className="text-center">
           <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-full bg-blue-50 text-cvsu-blue">
@@ -241,16 +224,12 @@ export default function QueueTicket() {
           </p>
         </div>
 
-        {/* ===================================================
-            TICKET CARD
-        ==================================================== */}
+        {/* Ticket Card */}
         <section className="relative mt-7 overflow-hidden rounded-2xl border border-border bg-white shadow-sm">
-
-          {/* Top blue strip */}
           <div className="h-2 bg-cvsu-blue" />
 
           <div className="px-6 py-8 text-center sm:px-10 sm:py-10">
-
+            {/* Queue Number */}
             <p className="text-xs font-bold uppercase tracking-[0.2em] text-ink-faint">
               Queue Number
             </p>
@@ -259,109 +238,51 @@ export default function QueueTicket() {
               {queue.queue_code}
             </p>
 
+            {/* Status */}
             <div className="mt-5 flex justify-center">
               <StatusBadge status={queue.status} />
             </div>
 
-            {/* Status information */}
-            <div
-              className={`
-                mt-8 rounded-xl border p-5
-                ${statusConfig.container}
-              `}
-            >
-              <div className="flex items-start gap-4 text-left">
+            {/* Status Information */}
+            <StatusInformation
+              config={statusConfig}
+              Icon={StatusIcon}
+            />
 
-                <div
-                  className={`
-                    flex h-10 w-10 shrink-0
-                    items-center justify-center
-                    rounded-lg
-                    ${statusConfig.iconBox}
-                  `}
-                >
-                  <StatusIcon className="h-5 w-5" />
-                </div>
-
-                <div className="min-w-0">
-                  <p className="text-sm font-bold text-ink">
-                    {statusConfig.label}
-                  </p>
-
-                  <p className="mt-1 text-xs leading-5 text-ink-muted">
-                    {statusConfig.description}
-                  </p>
-                </div>
-
-              </div>
-            </div>
-
-            {/* Waiting information */}
-            {queue.status === "WAITING" && (
-              <div className="mt-8 border-t border-border pt-8">
-
-                <div className="flex items-center justify-center gap-2 text-sm text-ink-muted">
-                  <UsersIcon />
-                  People ahead of you
-                </div>
-
-                <p className="mt-2 text-5xl font-black tracking-tight text-ink">
-                  {peopleAhead}
-                </p>
-
-                <p className="mt-2 text-xs text-ink-faint">
-                  {peopleAhead === 0
-                    ? "You are next in line."
-                    : "Please wait for your number to be called."}
-                </p>
-              </div>
+            {/* Waiting Information */}
+            {isWaiting && (
+              <WaitingInformation
+                peopleAhead={peopleAhead}
+              />
             )}
 
-            {/* Window information */}
+            {/* Window Information */}
             {isCalledOrServing && (
-              <div className="mt-8 border-t border-border pt-8">
-
-                <div className="flex items-center justify-center gap-2 text-sm text-ink-muted">
-                  <MapPin className="h-4 w-4" />
-                  Please proceed to
-                </div>
-
-                <p className="mt-2 text-2xl font-bold text-cvsu-blue">
-                  {queue.window_label || "the assigned window"}
-                </p>
-
-                <p className="mt-2 text-xs text-ink-faint">
-                  Your queue number has been called.
-                </p>
-              </div>
+              <WindowInformation
+                windowLabel={queue.window_label}
+              />
             )}
 
-            {/* Completed / skipped / cancelled */}
-            {STATUS_MESSAGE[queue.status] &&
-              !isCalledOrServing &&
-              queue.status !== "WAITING" && (
-                <div className="mt-8 border-t border-border pt-8">
-                  <p className="text-sm leading-6 text-ink">
-                    {STATUS_MESSAGE[queue.status]}
-                  </p>
-                </div>
+            {/* Terminal Information */}
+            {terminalMessage &&
+              !isWaiting &&
+              !isCalledOrServing && (
+                <TerminalInformation
+                  message={terminalMessage}
+                />
               )}
-
           </div>
         </section>
 
-        {/* ===================================================
-            ACTIONS
-        ==================================================== */}
+        {/* Actions */}
         <div className="mt-6">
-
-          {queue.status === "WAITING" && (
+          {isWaiting && (
             <button
+              type="button"
               onClick={handleCancel}
               disabled={cancelling}
               className="
-                w-full
-                rounded-lg
+                w-full rounded-lg
                 border border-status-cancelled/20
                 bg-white
                 px-4 py-3
@@ -380,10 +301,10 @@ export default function QueueTicket() {
           )}
 
           <button
+            type="button"
             onClick={() => navigate("/")}
             className="
-              mt-3
-              flex w-full
+              mt-3 flex w-full
               items-center justify-center gap-2
               rounded-lg
               bg-cvsu-blue
@@ -401,57 +322,176 @@ export default function QueueTicket() {
           </button>
         </div>
 
-        {/* ===================================================
-            LIVE NOTICE
-        ==================================================== */}
+        {/* Live Notice */}
         <div className="mt-6 flex items-start gap-3 rounded-xl border border-border bg-white p-4">
-
           <span className="mt-1 h-2 w-2 shrink-0 animate-pulse rounded-full bg-status-serving" />
 
           <p className="text-xs leading-5 text-ink-muted">
             This ticket updates automatically when your queue
             status changes. Keep this page open while waiting.
           </p>
-
         </div>
 
         {/* Footer */}
         <p className="mt-8 text-center text-xs text-ink-faint">
           CvSU Bacoor City Campus · Queueing Management System
         </p>
+      </div>
+    </main>
+  );
+}
 
-      </main>
+/* ============================================================
+   LOADING STATE
+============================================================ */
+
+function LoadingState() {
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-surface">
+      <div className="flex items-center gap-3 text-sm text-ink-muted">
+        <span className="h-4 w-4 animate-spin rounded-full border-2 border-border border-t-cvsu-blue" />
+        Loading your ticket...
+      </div>
     </div>
   );
 }
 
-/* ===============================================================
-   SMALL ICON
-================================================================ */
+/* ============================================================
+   TICKET NOT FOUND
+============================================================ */
 
-function UsersIcon() {
+function TicketNotFound({ onBack }) {
   return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      className="h-4 w-4"
-      aria-hidden="true"
+    <div className="flex min-h-screen items-center justify-center bg-surface px-6">
+      <div className="text-center">
+        <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-red-50 text-status-cancelled">
+          <Ticket className="h-6 w-6" />
+        </div>
+
+        <h1 className="mt-5 text-lg font-bold text-ink">
+          Ticket not found
+        </h1>
+
+        <p className="mt-1 text-sm text-ink-muted">
+          This queue ticket could not be loaded.
+        </p>
+
+        <button
+          type="button"
+          onClick={onBack}
+          className="
+            mt-6 rounded-lg
+            bg-cvsu-blue
+            px-5 py-2.5
+            text-sm font-semibold
+            text-white
+            transition
+            hover:bg-cvsu-blue-dark
+          "
+        >
+          Return to Queue
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* ============================================================
+   STATUS INFORMATION
+============================================================ */
+
+function StatusInformation({ config, Icon }) {
+  return (
+    <div
+      className={`
+        mt-8 rounded-xl border p-5
+        ${config.container}
+      `}
     >
-      <path
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"
-      />
+      <div className="flex items-start gap-4 text-left">
+        <div
+          className={`
+            flex h-10 w-10 shrink-0
+            items-center justify-center
+            rounded-lg
+            ${config.iconBox}
+          `}
+        >
+          <Icon className="h-5 w-5" />
+        </div>
 
-      <circle cx="9" cy="7" r="4" />
+        <div className="min-w-0">
+          <p className="text-sm font-bold text-ink">
+            {config.label}
+          </p>
 
-      <path
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"
-      />
-    </svg>
+          <p className="mt-1 text-xs leading-5 text-ink-muted">
+            {config.description}
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ============================================================
+   WAITING INFORMATION
+============================================================ */
+
+function WaitingInformation({ peopleAhead }) {
+  return (
+    <div className="mt-8 border-t border-border pt-8">
+      <div className="flex items-center justify-center gap-2 text-sm text-ink-muted">
+        <Users className="h-4 w-4" />
+        People ahead of you
+      </div>
+
+      <p className="mt-2 text-5xl font-black tracking-tight text-ink">
+        {peopleAhead}
+      </p>
+
+      <p className="mt-2 text-xs text-ink-faint">
+        {peopleAhead === 0
+          ? "You are next in line."
+          : "Please wait for your number to be called."}
+      </p>
+    </div>
+  );
+}
+
+/* ============================================================
+   WINDOW INFORMATION
+============================================================ */
+
+function WindowInformation({ windowLabel }) {
+  return (
+    <div className="mt-8 border-t border-border pt-8">
+      <div className="flex items-center justify-center gap-2 text-sm text-ink-muted">
+        <MapPin className="h-4 w-4" />
+        Please proceed to
+      </div>
+
+      <p className="mt-2 text-2xl font-bold text-cvsu-blue">
+        {windowLabel || "the assigned window"}
+      </p>
+
+      <p className="mt-2 text-xs text-ink-faint">
+        Your queue number has been called.
+      </p>
+    </div>
+  );
+}
+
+/* ============================================================
+   TERMINAL INFORMATION
+============================================================ */
+
+function TerminalInformation({ message }) {
+  return (
+    <div className="mt-8 border-t border-border pt-8">
+      <p className="text-sm leading-6 text-ink">
+        {message}
+      </p>
+    </div>
   );
 }
